@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- windows10.0.19041.0 TFM is what pulls in the WinRT projections for
+         Windows.Graphics.Capture / Direct3D11 automatically, no extra NuGet needed -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ScreenSnipAlpha</RootNamespace>
+    <AssemblyName>ScreenSnipAlpha</AssemblyName>
+    <Platforms>x64</Platforms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UseWPF + UseWindowsForms both auto-inject a global 'using' for their namespace,
+         and those collide on shared type names (Application, KeyEventArgs, etc).
+         Drop the Forms one; the few Forms types we need are referenced via an alias. -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.1" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.1" />
+  </ItemGroup>
+
+</Project>
