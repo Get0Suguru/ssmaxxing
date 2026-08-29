@@ -1,131 +1,126 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Interop;
 
 namespace ScreenSnipAlpha
 {
     /// <summary>
-    /// Global low-level keyboard hook. CapsLock is a modifier only:
-    /// CapsLock+V / CapsLock+S fire our actions. Win/Ctrl/Alt combos
-    /// (including Win+V clipboard history) are never swallowed.
+    /// Global hotkeys via RegisterHotKey (reliable). Default Alt+V / Alt+S.
+    /// Needs a HWND — we create a message-only window.
     /// </summary>
-    public class HotkeyHook
+    public sealed class HotkeyHook : IDisposable
     {
-        public event Action? CapsLockPlusV;
-        public event Action? CapsLockPlusS;
+        public event Action? CaptureHotkey;
+        public event Action? SourceHotkey;
 
-        private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYDOWN = 0x0100;
-        private const int WM_KEYUP = 0x0101;
-        private const int WM_SYSKEYDOWN = 0x0104;
-        private const int WM_SYSKEYUP = 0x0105;
+        private const int WM_HOTKEY = 0x0312;
+        private const int HOTKEY_CAPTURE = 1;
+        private const int HOTKEY_SOURCE = 2;
 
-        private const int VK_CAPITAL = 0x14;
-        private const int VK_V = 0x56;
-        private const int VK_S = 0x53;
-        private const int VK_CONTROL = 0x11;
-        private const int VK_MENU = 0x12;   // Alt
-        private const int VK_LWIN = 0x5B;
-        private const int VK_RWIN = 0x5C;
+        private const uint MOD_ALT = 0x0001;
+        private const uint MOD_CONTROL = 0x0002;
+        private const uint MOD_SHIFT = 0x0004;
+        private const uint MOD_WIN = 0x0008;
+        private const uint MOD_NOREPEAT = 0x4000;
 
-        private const uint LLKHF_INJECTED = 0x10;
-        private const uint LLKHF_LOWER_IL_INJECTED = 0x02;
-
-        private LowLevelKeyboardProc _proc;
-        private IntPtr _hookId = IntPtr.Zero;
-        private bool _capsHeld;
-
-        public HotkeyHook()
-        {
-            _proc = HookCallback;
-        }
+        private HwndSource? _source;
+        private IntPtr _hwnd = IntPtr.Zero;
+        private bool _registered;
+        private AppSettings _settings = new();
 
         public void Start()
         {
-            _hookId = SetHook(_proc);
-        }
+            if (_source != null) return;
 
-        public void Stop()
-        {
-            if (_hookId != IntPtr.Zero)
-                UnhookWindowsHookEx(_hookId);
-        }
-
-        private IntPtr SetHook(LowLevelKeyboardProc proc)
-        {
-            using var curProcess = System.Diagnostics.Process.GetCurrentProcess();
-            using var curModule = curProcess.MainModule!;
-            return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
-        }
-
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            if (nCode < 0)
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
-
-            int msg = wParam.ToInt32();
-            bool isDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-            bool isUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-            if (!isDown && !isUp)
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
-
-            var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-            bool injected = (info.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)) != 0;
-
-            // Let SendInput (Ctrl+V paste) and other injected keys through untouched.
-            if (injected)
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
-
-            if (info.vkCode == VK_CAPITAL)
+            var p = new HwndSourceParameters("ScreenSnipHotkeys")
             {
-                if (isDown) _capsHeld = true;
-                if (isUp) _capsHeld = false;
-                return (IntPtr)1; // swallow so CapsLock never toggles
-            }
+                Width = 0,
+                Height = 0,
+                ParentWindow = new IntPtr(-3), // HWND_MESSAGE
+                WindowStyle = 0
+            };
+            _source = new HwndSource(p);
+            _hwnd = _source.Handle;
+            _source.AddHook(WndProc);
 
-            if (_capsHeld && isDown && (info.vkCode == VK_V || info.vkCode == VK_S))
-            {
-                // Win+V, Ctrl+V, Alt+V must reach the OS / the focused app.
-                if (KeyDown(VK_LWIN) || KeyDown(VK_RWIN) || KeyDown(VK_CONTROL) || KeyDown(VK_MENU))
-                    return CallNextHookEx(_hookId, nCode, wParam, lParam);
-
-                if (info.vkCode == VK_V)
-                    CapsLockPlusV?.Invoke();
-                else
-                    CapsLockPlusS?.Invoke();
-                return (IntPtr)1;
-            }
-
-            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            ApplySettings(AppSettings.Load());
         }
 
-        private static bool KeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct KBDLLHOOKSTRUCT
+        public void ApplySettings(AppSettings s)
         {
-            public uint vkCode;
-            public uint scanCode;
-            public uint flags;
-            public uint time;
-            public IntPtr dwExtraInfo;
+            _settings = s;
+            UnregisterAll();
+            if (_hwnd == IntPtr.Zero) return;
+
+            uint mods = MapModifier(s.ModifierVk) | MOD_NOREPEAT;
+
+            bool ok1 = RegisterHotKey(_hwnd, HOTKEY_CAPTURE, mods, (uint)s.CaptureVk);
+            bool ok2 = RegisterHotKey(_hwnd, HOTKEY_SOURCE, mods, (uint)s.SourceVk);
+            _registered = ok1 || ok2;
+
+            if (!ok1 || !ok2)
+            {
+                // One of the combos is already taken by another app.
+                System.Diagnostics.Debug.WriteLine(
+                    $"RegisterHotKey failed: capture={ok1} source={ok2} err={Marshal.GetLastWin32Error()}");
+            }
         }
 
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        public void Stop() => Dispose();
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+        public void Dispose()
+        {
+            UnregisterAll();
+            if (_source != null)
+            {
+                _source.RemoveHook(WndProc);
+                _source.Dispose();
+                _source = null;
+                _hwnd = IntPtr.Zero;
+            }
+        }
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+        private void UnregisterAll()
+        {
+            if (_hwnd == IntPtr.Zero) return;
+            UnregisterHotKey(_hwnd, HOTKEY_CAPTURE);
+            UnregisterHotKey(_hwnd, HOTKEY_SOURCE);
+            _registered = false;
+        }
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_HOTKEY)
+            {
+                int id = wParam.ToInt32();
+                if (id == HOTKEY_CAPTURE)
+                {
+                    CaptureHotkey?.Invoke();
+                    handled = true;
+                }
+                else if (id == HOTKEY_SOURCE)
+                {
+                    SourceHotkey?.Invoke();
+                    handled = true;
+                }
+            }
+            return IntPtr.Zero;
+        }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
+        private static uint MapModifier(int vk) => vk switch
+        {
+            0x11 => MOD_CONTROL, // VK_CONTROL
+            0x12 => MOD_ALT,     // VK_MENU
+            0x10 => MOD_SHIFT,   // VK_SHIFT
+            0x5B or 0x5C => MOD_WIN,
+            _ => MOD_ALT
+        };
 
-        [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     }
 }

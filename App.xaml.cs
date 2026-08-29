@@ -6,14 +6,11 @@ using Forms = System.Windows.Forms;
 
 namespace ScreenSnipAlpha
 {
-    /// <summary>
-    /// Sticky source: either GDI entire-screen, or a live WGC session
-    /// (yellow border stays until you change source).
-    /// </summary>
     public class StickySource
     {
         public bool IsEntireScreen { get; set; } = true;
         public GraphicsCaptureItem? CaptureItem { get; set; }
+        public IntPtr Hwnd { get; set; }
         public string Label { get; set; } = "Entire Screen";
     }
 
@@ -23,17 +20,19 @@ namespace ScreenSnipAlpha
         private HotkeyHook? _hook;
         private LiveWgcSession? _live;
         private bool _busy;
+        private AppSettings _settings = AppSettings.Load();
+
         public static StickySource CurrentSource { get; private set; } = new StickySource();
+        public static bool IsSharing { get; private set; }
 
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
-
             SetupTrayIcon();
 
             _hook = new HotkeyHook();
-            _hook.CapsLockPlusV += () => Dispatcher.BeginInvoke(new Action(OnCaptureAndPaste));
-            _hook.CapsLockPlusS += () => Dispatcher.BeginInvoke(new Action(OnChangeSource));
+            _hook.CaptureHotkey += () => Dispatcher.BeginInvoke(new Action(OnCaptureAndPaste));
+            _hook.SourceHotkey += () => Dispatcher.BeginInvoke(new Action(OnChangeSource));
             _hook.Start();
         }
 
@@ -45,16 +44,57 @@ namespace ScreenSnipAlpha
                 Visible = true,
                 Text = TrayText()
             };
+            RebuildTrayMenu();
+        }
+
+        private void RebuildTrayMenu()
+        {
+            if (_trayIcon == null) return;
 
             var menu = new Forms.ContextMenuStrip();
-            menu.Items.Add("Change source (CapsLock+S)", null, (_, _) => OnChangeSource());
-            menu.Items.Add("Stop sharing", null, (_, _) => StopLive("Entire Screen"));
+            menu.Items.Add($"Capture ({_settings.ModifierName}+{_settings.CaptureKeyName})", null,
+                (_, _) => OnCaptureAndPaste());
+            menu.Items.Add($"Change source ({_settings.ModifierName}+{_settings.SourceKeyName})", null,
+                (_, _) => OnChangeSource());
+            menu.Items.Add("Stop sharing", null, (_, _) => StopLive());
+            menu.Items.Add(new Forms.ToolStripSeparator());
+
+            var keepItem = new Forms.ToolStripMenuItem("Also keep on clipboard")
+            {
+                Checked = _settings.KeepOnClipboard,
+                CheckOnClick = true
+            };
+            keepItem.CheckedChanged += (_, _) =>
+            {
+                _settings.KeepOnClipboard = keepItem.Checked;
+                _settings.Save();
+            };
+            menu.Items.Add(keepItem);
+
+            menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => Shutdown());
             _trayIcon.ContextMenuStrip = menu;
+            _trayIcon.Text = TrayText();
         }
 
-        private string TrayText() => $"ScreenSnip — {CurrentSource.Label}  CapsLock+V paste, CapsLock+S share";
+        private void OpenSettings()
+        {
+            var win = new SettingsWindow(_settings);
+            if (win.ShowDialog() == true && win.Result != null)
+            {
+                _settings = win.Result;
+                _settings.Save();
+                _hook?.ApplySettings(_settings);
+                RebuildTrayMenu();
+                _trayIcon?.ShowBalloonTip(1500, "ScreenSnip",
+                    $"Hotkeys: {_settings.ModifierName}+{_settings.CaptureKeyName} / {_settings.ModifierName}+{_settings.SourceKeyName}",
+                    Forms.ToolTipIcon.Info);
+            }
+        }
+
+        private string TrayText() =>
+            $"ScreenSnip — {CurrentSource.Label}  |  {_settings.ModifierName}+{_settings.CaptureKeyName} / {_settings.ModifierName}+{_settings.SourceKeyName}";
 
         private void OnCaptureAndPaste()
         {
@@ -69,9 +109,9 @@ namespace ScreenSnipAlpha
                     if (_live.IsClosed)
                     {
                         string why = _live.LastError ?? "shared window closed";
-                        StopLive(CurrentSource.Label);
+                        StopLive();
                         _trayIcon!.ShowBalloonTip(1800, "ScreenSnip",
-                            $"Share ended ({why}). CapsLock+S to pick again.",
+                            $"Share ended ({why}). {_settings.ModifierName}+{_settings.SourceKeyName} to pick again.",
                             Forms.ToolTipIcon.Warning);
                         return;
                     }
@@ -80,7 +120,7 @@ namespace ScreenSnipAlpha
                     if (bmp == null)
                     {
                         _trayIcon!.ShowBalloonTip(1800, "ScreenSnip",
-                            _live.LastError ?? "Waiting for first frame — try CapsLock+V again.",
+                            _live.LastError ?? "Waiting for first frame — try again.",
                             Forms.ToolTipIcon.Warning);
                         return;
                     }
@@ -90,7 +130,9 @@ namespace ScreenSnipAlpha
                     bmp = CaptureService.CaptureEntireScreenGdi();
                 }
 
-                ClipboardPaste.SetImageAndPasteAtCursor(bmp);
+                // Always paste into focused field. KeepOnClipboard only controls whether
+                // the image stays on the clipboard afterward.
+                ClipboardPaste.Deliver(bmp, keepOnClipboard: _settings.KeepOnClipboard);
             }
             catch (Exception ex)
             {
@@ -109,21 +151,31 @@ namespace ScreenSnipAlpha
             try
             {
                 var picker = new SourcePicker();
-                if (picker.ShowDialog() != true || picker.SelectedSource == null)
+                if (picker.ShowDialog() != true)
+                    return;
+
+                if (picker.RequestStopShare)
+                {
+                    StopLive();
+                    _trayIcon!.ShowBalloonTip(1200, "ScreenSnip", "Sharing stopped.", Forms.ToolTipIcon.Info);
+                    return;
+                }
+
+                if (picker.SelectedSource == null)
                     return;
 
                 var picked = picker.SelectedSource;
                 if (picked.IsEntireScreen || picked.CaptureItem == null)
                 {
-                    StopLive("Entire Screen");
+                    StopLive();
                     _trayIcon!.ShowBalloonTip(1200, "ScreenSnip", "Source set: Entire Screen", Forms.ToolTipIcon.Info);
                     return;
                 }
 
-                LiveWgcSession? session = null;
+                LiveWgcSession? session;
                 try
                 {
-                    session = new LiveWgcSession(picked.CaptureItem);
+                    session = new LiveWgcSession(picked.CaptureItem, picked.Hwnd);
                 }
                 catch (Exception ex)
                 {
@@ -135,6 +187,7 @@ namespace ScreenSnipAlpha
 
                 _live?.Dispose();
                 _live = session;
+                IsSharing = true;
                 CurrentSource = new StickySource
                 {
                     IsEntireScreen = false,
@@ -142,7 +195,7 @@ namespace ScreenSnipAlpha
                 };
                 _trayIcon!.Text = TrayText();
                 _trayIcon.ShowBalloonTip(1400, "ScreenSnip",
-                    $"Sharing {session.Label} — yellow border stays. CapsLock+V pastes.",
+                    $"Sharing {session.Label} — yellow border stays.",
                     Forms.ToolTipIcon.Info);
             }
             finally
@@ -151,10 +204,11 @@ namespace ScreenSnipAlpha
             }
         }
 
-        private void StopLive(string _)
+        private void StopLive()
         {
             _live?.Dispose();
             _live = null;
+            IsSharing = false;
             CurrentSource = new StickySource { IsEntireScreen = true, Label = "Entire Screen" };
             if (_trayIcon != null)
                 _trayIcon.Text = TrayText();
@@ -162,10 +216,13 @@ namespace ScreenSnipAlpha
 
         protected override void OnExit(ExitEventArgs e)
         {
-            _hook?.Stop();
+            _hook?.Dispose();
             _live?.Dispose();
-            _trayIcon!.Visible = false;
-            _trayIcon.Dispose();
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+            }
             base.OnExit(e);
         }
     }

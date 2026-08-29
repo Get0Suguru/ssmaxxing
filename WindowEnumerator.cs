@@ -9,10 +9,26 @@ namespace ScreenSnipAlpha
 
     public static class WindowEnumerator
     {
-        public static List<WindowEntry> GetVisibleWindows()
+        /// <summary>
+        /// Top-level visible windows on the *current* virtual desktop only.
+        /// Windows on other desktops are skipped — WGC can't usefully capture them
+        /// until that desktop is visited.
+        /// </summary>
+        public static List<WindowEntry> GetVisibleWindowsOnCurrentDesktop()
         {
             var result = new List<WindowEntry>();
             var selfPid = Environment.ProcessId;
+
+            // Virtual desktop filter (Win10+)
+            IVirtualDesktopManager? vdm = null;
+            try
+            {
+                vdm = (IVirtualDesktopManager)new VirtualDesktopManager();
+            }
+            catch
+            {
+                // Older OS or COM failure — fall through and list everything visible.
+            }
 
             EnumWindows((hwnd, _) =>
             {
@@ -20,11 +36,27 @@ namespace ScreenSnipAlpha
                 if (GetWindowTextLength(hwnd) == 0) return true;
 
                 GetWindowThreadProcessId(hwnd, out uint pid);
-                if (pid == selfPid) return true; // don't list ourselves
+                if (pid == selfPid) return true;
 
-                // Skip tool windows / windows with no taskbar presence.
                 int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
                 if ((exStyle & WS_EX_TOOLWINDOW) != 0) return true;
+
+                // Cloaked UWP / minimized shell noise
+                if (IsCloaked(hwnd)) return true;
+
+                if (vdm != null)
+                {
+                    try
+                    {
+                        // false = not on current desktop
+                        if (vdm.IsWindowOnCurrentVirtualDesktop(hwnd) == false)
+                            return true;
+                    }
+                    catch
+                    {
+                        // If the query fails, keep the window rather than drop everything.
+                    }
+                }
 
                 var sb = new StringBuilder(256);
                 GetWindowText(hwnd, sb, sb.Capacity);
@@ -38,8 +70,16 @@ namespace ScreenSnipAlpha
             return result;
         }
 
+        private static bool IsCloaked(IntPtr hwnd)
+        {
+            if (DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0)
+                return cloaked != 0;
+            return false;
+        }
+
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int DWMWA_CLOAKED = 14;
 
         private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -60,5 +100,23 @@ namespace ScreenSnipAlpha
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+        // COM: IVirtualDesktopManager
+        [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IVirtualDesktopManager
+        {
+            bool IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow);
+            Guid GetWindowDesktopId(IntPtr topLevelWindow);
+            void MoveWindowToDesktop(IntPtr topLevelWindow, [MarshalAs(UnmanagedType.LPStruct)] Guid desktopId);
+        }
+
+        [ComImport, Guid("aa509086-5ca9-4c25-8f95-589d3c07b48a")]
+        private class VirtualDesktopManager
+        {
+        }
     }
 }

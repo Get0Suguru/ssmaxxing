@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "OpTWg+wkbZs=",
+  "dgSpecHash": "qWkGP+yAuGk=",
   "success": true,
-  "projectFilePath": "C:\\Users\\gauta\\Desktop\\LAB\\ScreenSnipAlpha\\ScreenSnipAlpha\\ScreenSnipAlpha.csproj",
+  "projectFilePath": "C:\\Users\\gauta\\Desktop\\LAB\\v3\\ScreenSnipAlpha\\ScreenSnipAlpha.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\gauta\\.nuget\\packages\\sharpgen.runtime\\2.4.2-beta\\sharpgen.runtime.2.4.2-beta.nupkg.sha512",
     "C:\\Users\\gauta\\.nuget\\packages\\sharpgen.runtime.com\\2.4.2-beta\\sharpgen.runtime.com.2.4.2-beta.nupkg.sha512",
