@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "dgSpecHash": "jDAip6oKlYA=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\gauta\\Desktop\\LAB\\v4\\ScreenSnipAlpha\\ScreenSnipAlpha.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\gauta\\.nuget\\packages\\microsoft.net.illink.tasks\\9.0.19\\microsoft.net.illink.tasks.9.0.19.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\sharpgen.runtime\\2.4.2-beta\\sharpgen.runtime.2.4.2-beta.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\sharpgen.runtime.com\\2.4.2-beta\\sharpgen.runtime.com.2.4.2-beta.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\system.text.json\\9.0.1\\system.text.json.9.0.1.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\vortice.direct3d11\\3.8.1\\vortice.direct3d11.3.8.1.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\vortice.directx\\3.8.1\\vortice.directx.3.8.1.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\vortice.dxgi\\3.8.1\\vortice.dxgi.3.8.1.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\vortice.mathematics\\2.0.0\\vortice.mathematics.2.0.0.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\9.0.19\\microsoft.netcore.app.runtime.win-x64.9.0.19.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\9.0.19\\microsoft.windowsdesktop.app.runtime.win-x64.9.0.19.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\9.0.19\\microsoft.aspnetcore.app.runtime.win-x64.9.0.19.nupkg.sha512",
+    "C:\\Users\\gauta\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.57\\microsoft.windows.sdk.net.ref.10.0.19041.57.nupkg.sha512"
+  ],
+  "logs": []
+}
